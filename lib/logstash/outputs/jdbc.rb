@@ -213,23 +213,33 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
       # We're not counting that towards our retry count.
       return events, false
     end
-
+	
+	connection.setAutoCommit(false);
+	 
+	statement = connection.prepareStatement(
+        (@unsafe_statement == true) ? event.sprintf(@statement[0]) : @statement[0]
+    )
+	
     events.each do |event|
-      begin
-        statement = connection.prepareStatement(
-          (@unsafe_statement == true) ? event.sprintf(@statement[0]) : @statement[0]
-        )
-        statement = add_statement_event_params(statement, event) if @statement.length > 1
-        statement.execute
-      rescue => e
-        if retry_exception?(e, event.to_json())
-          events_to_retry.push(event)
-        end
-      ensure
-        statement.close unless statement.nil?
-      end
+		statement = add_statement_event_params(statement, event) if @statement.length > 1
+        statement.addBatch();
     end
-
+	
+	
+	begin
+		statement.executeBatch();
+		connection.commit()
+	rescue => e
+		retrying = (e.respond_to? 'getSQLState' and (RETRYABLE_SQLSTATE_CLASSES.include?(e.getSQLState.to_s[0,2]) or @retry_sql_states.include?(e.getSQLState)))
+		if retrying
+			events.each do |event|
+				events_to_retry.push(event)
+			end
+		end
+	ensure
+		statement.close unless statement.nil?
+	end
+	
     connection.close unless connection.nil?
 
     return events_to_retry, true
@@ -269,7 +279,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
   def add_statement_event_params(statement, event)
     @statement[1..-1].each_with_index do |i, idx|
-      if @enable_event_as_json_keyword == true and i.is_a? String and i == @event_as_json_keyword
+      if @enable_event_as_json_keyword and i.is_a? String and i == @event_as_json_keyword
         value = event.to_json
       elsif i.is_a? String
         value = event.get(i)
@@ -300,8 +310,7 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
           statement.setInt(idx + 1, value)
         end
       when BigDecimal
-        # TODO: There has to be a better way than this. Find it.
-        statement.setBigDecimal(idx + 1, java.math.BigDecimal.new(value.to_s))
+        statement.setBigDecimal(idx + 1, value)
       when Float
         statement.setFloat(idx + 1, value)
       when String
@@ -327,14 +336,16 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
   def log_jdbc_exception(exception, retrying, event)
     current_exception = exception
-    log_text = 'JDBC - Exception. ' + (retrying ? 'Retrying' : 'Not retrying') 
+    log_text = 'JDBC - Exception. ' + (retrying ? 'Retrying' : 'Not retrying') + '.'
+    
+    if(event != nil)
+        log_text += ' event: "' + event + '".'
+    end
     
     log_method = (retrying ? 'warn' : 'error')
 
     loop do
-      # TODO reformat event output so that it only shows the fields necessary.
-
-      @logger.send(log_method, log_text, :exception => current_exception, :statement => @statement[0], :event => event)
+      @logger.send(log_method, log_text, :exception => current_exception)
 
       if current_exception.respond_to? 'getNextException'
         current_exception = current_exception.getNextException()
