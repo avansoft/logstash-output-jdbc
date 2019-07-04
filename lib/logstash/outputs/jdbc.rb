@@ -177,7 +177,12 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
     # Load jar from driver path
     unless @driver_jar_path.nil?
       raise LogStash::ConfigurationError, 'JDBC - Could not find jar file at given path. Check config.' unless File.exist? @driver_jar_path
-      require @driver_jar_path
+      # START: EDIT BY MOJTABA VARMAZYAR
+      # require @driver_jar_path
+      class_loader = java.lang.ClassLoader.getSystemClassLoader().to_java(java.net.URLClassLoader)
+      class_loader.add_url(java.io.File.new(@driver_jar_path).toURI().toURL())
+      # END: EDIT BY MOJTABA VARMAZYAR
+
       return
     end
 
@@ -196,7 +201,11 @@ class LogStash::Outputs::Jdbc < LogStash::Outputs::Base
 
     jars.each do |jar|
       @logger.trace('JDBC - Loaded jar', jar: jar)
-      require jar
+      # START: EDIT BY MOJTABA VARMAZYAR
+      # require jar
+      class_loader = java.lang.ClassLoader.getSystemClassLoader().to_java(java.net.URLClassLoader)
+      class_loader.add_url(java.io.File.new(jar).toURI().toURL())
+      # END: EDIT BY MOJTABA VARMAZYAR
     end
   end
 
